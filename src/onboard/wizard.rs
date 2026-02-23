@@ -7042,8 +7042,7 @@ mod tests {
 
         let config = Config {
             workspace_dir: tmp.path().to_path_buf(),
-            // Use a non-provider channel key to keep this test deterministic and offline.
-            default_provider: Some("imessage".to_string()),
+            default_provider: Some("__unsupported__".to_string()),
             ..Config::default()
         };
 

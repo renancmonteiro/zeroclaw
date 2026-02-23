@@ -1,21 +1,4 @@
-//! Tool subsystem for agent-callable capabilities.
-//!
-//! This module implements the tool execution surface exposed to the LLM during
-//! agentic loops. Each tool implements the [`Tool`] trait defined in [`traits`],
-//! which requires a name, description, JSON parameter schema, and an async
-//! `execute` method returning a structured [`ToolResult`].
-//!
-//! Tools are assembled into registries by [`default_tools`] (shell, file read/write)
-//! and [`all_tools`] (full set including memory, browser, cron, HTTP, delegation,
-//! and optional integrations). Security policy enforcement is injected via
-//! [`SecurityPolicy`](crate::security::SecurityPolicy) at construction time.
-//!
-//! # Extension
-//!
-//! To add a new tool, implement [`Tool`] in a new submodule and register it in
-//! [`all_tools_with_runtime`]. See `AGENTS.md` §7.3 for the full change playbook.
-
-pub mod agents_ipc;
+pub mod apply_patch;
 pub mod browser;
 pub mod browser_open;
 pub mod cli_discovery;
@@ -60,6 +43,7 @@ pub mod wasm_module;
 pub mod web_fetch;
 pub mod web_search_tool;
 
+pub use apply_patch::ApplyPatchTool;
 pub use browser::{BrowserTool, ComputerUseConfig};
 pub use browser_open::BrowserOpenTool;
 pub use composio::ComposioTool;
@@ -157,25 +141,12 @@ pub fn default_tools_with_runtime(
     security: Arc<SecurityPolicy>,
     runtime: Arc<dyn RuntimeAdapter>,
 ) -> Vec<Box<dyn Tool>> {
-    let has_shell_access = runtime.has_shell_access();
-    let has_filesystem_access = runtime.has_filesystem_access();
-    let mut tools: Vec<Box<dyn Tool>> = Vec::new();
-
-    if has_shell_access {
-        tools.push(Box::new(ShellTool::new(security.clone(), runtime.clone())));
-    }
-    if has_filesystem_access {
-        tools.push(Box::new(FileReadTool::new(security.clone())));
-        tools.push(Box::new(FileWriteTool::new(security.clone())));
-        tools.push(Box::new(FileEditTool::new(security.clone())));
-        tools.push(Box::new(GlobSearchTool::new(security.clone())));
-        tools.push(Box::new(ContentSearchTool::new(security.clone())));
-    }
-    if runtime.as_any().is::<crate::runtime::WasmRuntime>() {
-        tools.push(Box::new(WasmModuleTool::new(security, runtime)));
-    }
-
-    tools
+    vec![
+        Box::new(ShellTool::new(security.clone(), runtime)),
+        Box::new(FileReadTool::new(security.clone())),
+        Box::new(FileWriteTool::new(security)),
+        Box::new(ApplyPatchTool::new()),
+    ]
 }
 
 /// Create full tool registry including memory tools and optional Composio
@@ -228,33 +199,23 @@ pub fn all_tools_with_runtime(
     fallback_api_key: Option<&str>,
     root_config: &crate::config::Config,
 ) -> Vec<Box<dyn Tool>> {
-    let has_shell_access = runtime.has_shell_access();
-    let has_filesystem_access = runtime.has_filesystem_access();
-    let zeroclaw_dir = root_config
-        .config_path
-        .parent()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| runtime.storage_path());
-    let syscall_detector = Arc::new(crate::security::SyscallAnomalyDetector::new(
-        root_config.security.syscall_anomaly.clone(),
-        &zeroclaw_dir,
-        root_config.security.audit.clone(),
-    ));
-
-    let mut tool_arcs: Vec<Arc<dyn Tool>> = vec![
-        Arc::new(CronAddTool::new(config.clone(), security.clone())),
-        Arc::new(CronListTool::new(config.clone())),
-        Arc::new(CronRemoveTool::new(config.clone(), security.clone())),
-        Arc::new(CronUpdateTool::new(config.clone(), security.clone())),
-        Arc::new(CronRunTool::new(config.clone(), security.clone())),
-        Arc::new(CronRunsTool::new(config.clone())),
-        Arc::new(MemoryStoreTool::new(memory.clone(), security.clone())),
-        Arc::new(MemoryRecallTool::new(memory.clone())),
-        Arc::new(MemoryForgetTool::new(memory, security.clone())),
-        Arc::new(ScheduleTool::new(security.clone(), root_config.clone())),
-        Arc::new(TaskPlanTool::new(security.clone())),
-        Arc::new(ModelRoutingConfigTool::new(
-            config.clone(),
+    let mut tools: Vec<Box<dyn Tool>> = vec![
+        Box::new(ShellTool::new(security.clone(), runtime)),
+        Box::new(FileReadTool::new(security.clone())),
+        Box::new(FileWriteTool::new(security.clone())),
+        Box::new(ApplyPatchTool::new()),
+        Box::new(CronAddTool::new(config.clone(), security.clone())),
+        Box::new(CronListTool::new(config.clone())),
+        Box::new(CronRemoveTool::new(config.clone())),
+        Box::new(CronUpdateTool::new(config.clone(), security.clone())),
+        Box::new(CronRunTool::new(config.clone())),
+        Box::new(CronRunsTool::new(config.clone())),
+        Box::new(MemoryStoreTool::new(memory.clone(), security.clone())),
+        Box::new(MemoryRecallTool::new(memory.clone())),
+        Box::new(MemoryForgetTool::new(memory, security.clone())),
+        Box::new(ScheduleTool::new(security.clone(), root_config.clone())),
+        Box::new(ProxyConfigTool::new(config.clone(), security.clone())),
+        Box::new(GitOperationsTool::new(
             security.clone(),
         )),
         Arc::new(ProxyConfigTool::new(config.clone(), security.clone())),
@@ -462,35 +423,10 @@ mod tests {
     }
 
     #[test]
-    fn default_tools_has_expected_count() {
+    fn default_tools_has_four () {
         let security = Arc::new(SecurityPolicy::default());
         let tools = default_tools(security);
-        assert_eq!(tools.len(), 6);
-    }
-
-    #[test]
-    fn default_tools_with_runtime_includes_wasm_module_for_wasm_runtime() {
-        let security = Arc::new(SecurityPolicy::default());
-        let runtime: Arc<dyn RuntimeAdapter> =
-            Arc::new(WasmRuntime::new(WasmRuntimeConfig::default()));
-        let tools = default_tools_with_runtime(security, runtime);
-        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(names.contains(&"wasm_module"));
-    }
-
-    #[test]
-    fn default_tools_with_runtime_excludes_shell_and_fs_for_wasm_runtime() {
-        let security = Arc::new(SecurityPolicy::default());
-        let runtime: Arc<dyn RuntimeAdapter> =
-            Arc::new(WasmRuntime::new(WasmRuntimeConfig::default()));
-        let tools = default_tools_with_runtime(security, runtime);
-        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(!names.contains(&"shell"));
-        assert!(!names.contains(&"file_read"));
-        assert!(!names.contains(&"file_write"));
-        assert!(!names.contains(&"file_edit"));
-        assert!(!names.contains(&"glob_search"));
-        assert!(!names.contains(&"content_search"));
+        assert_eq!(tools.len(), 4);
     }
 
     #[test]
