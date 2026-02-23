@@ -252,8 +252,6 @@ impl OpenAiCompatibleProvider {
             user_agent: user_agent.map(ToString::to_string),
             merge_system_into_user,
             native_tool_calling: !merge_system_into_user,
-            api_mode,
-            max_tokens_override: max_tokens_override.filter(|value| *value > 0),
         }
     }
 
