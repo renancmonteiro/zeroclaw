@@ -809,6 +809,7 @@ mod tests {
                 success: true,
                 output: "tool-out".into(),
                 error: None,
+                error_kind: None,
             })
         }
     }
