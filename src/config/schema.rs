@@ -5965,14 +5965,15 @@ impl Config {
         #[cfg(unix)]
         {
             use std::{fs::Permissions, os::unix::fs::PermissionsExt};
-            fs::set_permissions(&self.config_path, Permissions::from_mode(0o600))
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to enforce secure permissions on config file: {}",
-                        self.config_path.display()
-                    )
-                })?;
+            if let Err(err) =
+                fs::set_permissions(&self.config_path, Permissions::from_mode(0o600)).await
+            {
+                tracing::warn!(
+                    "Failed to harden config permissions to 0600 at {}: {}",
+                    self.config_path.display(),
+                    err
+                );
+            }
         }
 
         sync_directory(parent_dir).await?;
