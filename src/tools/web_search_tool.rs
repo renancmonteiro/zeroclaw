@@ -356,6 +356,7 @@ impl Tool for WebSearchTool {
             success: true,
             output: result,
             error: None,
+            error_kind: None,
         })
     }
 }

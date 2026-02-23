@@ -309,6 +309,7 @@ impl Tool for WebFetchTool {
                 success: false,
                 output: String::new(),
                 error: Some("Action blocked: autonomy is read-only".into()),
+                error_kind: None,
             });
         }
 
@@ -317,6 +318,7 @@ impl Tool for WebFetchTool {
                 success: false,
                 output: String::new(),
                 error: Some("Action blocked: rate limit exceeded".into()),
+                error_kind: None,
             });
         }
 
@@ -327,7 +329,8 @@ impl Tool for WebFetchTool {
                     success: false,
                     output: String::new(),
                     error: Some(e.to_string()),
-                });
+                    error_kind: None,
+                })
             }
         };
 
@@ -340,18 +343,100 @@ impl Tool for WebFetchTool {
             )),
         };
 
-        match result {
-            Ok(output) => Ok(ToolResult {
-                success: true,
-                output: self.truncate_response(&output),
-                error: None,
-            }),
-            Err(e) => Ok(ToolResult {
+        let builder = reqwest::Client::builder()
+            .timeout(Duration::from_secs(timeout_secs))
+            .connect_timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .user_agent("ZeroClaw/0.1 (web_fetch)");
+        let builder = crate::config::apply_runtime_proxy_to_builder(builder, "tool.web_fetch");
+        let client = match builder.build() {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("Failed to build HTTP client: {e}")),
+                    error_kind: None,
+                })
+            }
+        };
+
+        let response = match client.get(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("HTTP request failed: {e}")),
+                    error_kind: None,
+                })
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            return Ok(ToolResult {
                 success: false,
                 output: String::new(),
-                error: Some(e.to_string()),
-            }),
+                error: Some(format!(
+                    "HTTP {} {}",
+                    status.as_u16(),
+                    status.canonical_reason().unwrap_or("Unknown")
+                )),
+                error_kind: None,
+            });
         }
+
+        // Determine content type for processing strategy
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_lowercase();
+
+        let body = match response.text().await {
+            Ok(t) => t,
+            Err(e) => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("Failed to read response body: {e}")),
+                    error_kind: None,
+                })
+            }
+        };
+
+        let text = if content_type.contains("text/html") {
+            nanohtml2text::html2text(&body)
+        } else if content_type.contains("text/plain")
+            || content_type.contains("text/markdown")
+            || content_type.contains("application/json")
+        {
+            body
+        } else if content_type.is_empty() {
+            // No content-type header; try HTML conversion as best-effort
+            nanohtml2text::html2text(&body)
+        } else {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!(
+                    "Unsupported content type: {content_type}. \
+                     web_fetch supports text/html, text/plain, text/markdown, and application/json."
+                )),
+                error_kind: None,
+            });
+        };
+
+        let output = self.truncate_response(&text);
+
+        Ok(ToolResult {
+            success: true,
+            output,
+            error: None,
+            error_kind: None,
+        })
     }
 }
 
