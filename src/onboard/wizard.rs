@@ -1,7 +1,7 @@
 use crate::config::schema::{
-    default_nostr_relays, DingTalkConfig, IrcConfig, LarkReceiveMode, LinqConfig,
-    NextcloudTalkConfig, NostrConfig, QQConfig, QQReceiveMode, SignalConfig, StreamMode,
-    WhatsAppConfig,
+    default_lark_draft_update_interval_ms, default_lark_max_draft_edits, default_nostr_relays,
+    DingTalkConfig, IrcConfig, LarkReceiveMode, LinqConfig, NextcloudTalkConfig, NostrConfig,
+    QQConfig, SignalConfig, StreamMode, WhatsAppConfig,
 };
 use crate::config::{
     AutonomyConfig, BrowserConfig, ChannelsConfig, ComposioConfig, Config, DiscordConfig,
@@ -4970,6 +4970,8 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     use_feishu,
                     receive_mode,
                     port,
+                    draft_update_interval_ms: default_lark_draft_update_interval_ms(),
+                    max_draft_edits: default_lark_max_draft_edits(),
                 });
             }
             ChannelMenuChoice::Nostr => {
@@ -7225,6 +7227,20 @@ mod tests {
             app_token: "token".into(),
             webhook_secret: Some("secret".into()),
             allowed_users: vec!["*".into()],
+        });
+        assert!(has_launchable_channels(&channels));
+
+        channels.nextcloud_talk = None;
+        channels.feishu = Some(crate::config::schema::FeishuConfig {
+            app_id: "cli_123".into(),
+            app_secret: "secret".into(),
+            encrypt_key: None,
+            verification_token: None,
+            allowed_users: vec!["*".into()],
+            receive_mode: crate::config::schema::LarkReceiveMode::Websocket,
+            port: None,
+            draft_update_interval_ms: 3000,
+            max_draft_edits: 20,
         });
         assert!(has_launchable_channels(&channels));
     }
