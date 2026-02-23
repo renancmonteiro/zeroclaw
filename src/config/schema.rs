@@ -3623,6 +3623,14 @@ pub enum LarkReceiveMode {
     Webhook,
 }
 
+pub fn default_lark_draft_update_interval_ms() -> u64 {
+    3000
+}
+
+pub fn default_lark_max_draft_edits() -> u32 {
+    20
+}
+
 /// Lark/Feishu configuration for messaging integration.
 /// Lark is the international version; Feishu is the Chinese version.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -3654,6 +3662,12 @@ pub struct LarkConfig {
     /// Not required (and ignored) for websocket mode.
     #[serde(default)]
     pub port: Option<u16>,
+    /// Minimum interval (ms) between draft message edits. Default: 3000.
+    #[serde(default = "default_lark_draft_update_interval_ms")]
+    pub draft_update_interval_ms: u64,
+    /// Maximum number of edits per draft message before stopping updates.
+    #[serde(default = "default_lark_max_draft_edits")]
+    pub max_draft_edits: u32,
 }
 
 impl ChannelConfig for LarkConfig {
@@ -3688,6 +3702,12 @@ pub struct FeishuConfig {
     /// Not required (and ignored) for websocket mode.
     #[serde(default)]
     pub port: Option<u16>,
+    /// Minimum interval between streaming draft edits (milliseconds).
+    #[serde(default = "default_lark_draft_update_interval_ms")]
+    pub draft_update_interval_ms: u64,
+    /// Maximum number of draft edits per message before finalizing.
+    #[serde(default = "default_lark_max_draft_edits")]
+    pub max_draft_edits: u32,
 }
 
 impl ChannelConfig for FeishuConfig {
