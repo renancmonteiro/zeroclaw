@@ -1,5 +1,4 @@
 #![warn(clippy::all, clippy::pedantic)]
-#![forbid(unsafe_code)]
 #![allow(
     clippy::assigning_clones,
     clippy::bool_to_int_with_if,
@@ -69,6 +68,7 @@ pub(crate) mod service;
 pub(crate) mod skills;
 pub mod tools;
 pub(crate) mod tunnel;
+pub mod update;
 pub(crate) mod util;
 
 pub use config::Config;
@@ -333,20 +333,6 @@ pub enum MemoryCommands {
 /// Integration subcommands
 #[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IntegrationCommands {
-    /// List all integrations (optionally filter by category or status)
-    List {
-        /// Filter by category (e.g. "chat", "ai", "productivity")
-        #[arg(long, short)]
-        category: Option<String>,
-        /// Filter by status: active, available, coming-soon
-        #[arg(long, short)]
-        status: Option<String>,
-    },
-    /// Search integrations by keyword (matches name and description)
-    Search {
-        /// Search query
-        query: String,
-    },
     /// Show details about a specific integration
     Info {
         /// Integration name
