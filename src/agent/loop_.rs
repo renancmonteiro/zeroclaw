@@ -1425,20 +1425,20 @@ pub async fn run(
             &mut history,
             &tools_registry,
             observer.as_ref(),
-                provider_name,
-                model_name,
-                temperature,
-                false,
-                approval_manager.as_ref(),
-                channel_name,
-                &config.multimodal,
-                config.agent.max_tool_iterations,
-                None,
-                None,
-                hooks.as_deref(),
-                &[],
-            )
-            .await?;
+            provider_name,
+            model_name,
+            temperature,
+            false,
+            approval_manager.as_ref(),
+            channel_name,
+            &config.multimodal,
+            config.agent.max_tool_iterations,
+            None,
+            None,
+            hooks.as_deref(),
+            &[],
+        )
+        .await?;
         final_output = response.clone();
         println!("{response}");
         observer.record_event(&ObserverEvent::TurnComplete);
