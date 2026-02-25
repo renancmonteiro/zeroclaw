@@ -87,8 +87,8 @@ use config::Config;
 
 // Re-export so binary modules can use crate::<CommandEnum> while keeping a single source of truth.
 pub use zeroclaw::{
-    ChannelCommands, CronCommands, HardwareCommands, IntegrationCommands, MigrateCommands,
-    PeripheralCommands, ServiceCommands, SkillCommands,
+    ChannelCommands, CronCommands, HardwareCommands, IntegrationCommands, McpCommands,
+    MigrateCommands, PeripheralCommands, ServiceCommands, SkillCommands,
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -355,6 +355,20 @@ Examples:
     Skills {
         #[command(subcommand)]
         skill_command: SkillCommands,
+    },
+
+    /// Manage MCP (Model Context Protocol) servers
+    #[command(long_about = "\
+Manage MCP server connections.
+
+Authorize with OAuth-protected MCP servers and check token status.
+
+Examples:
+  zeroclaw mcp auth fellow        # authorize with Fellow MCP server
+  zeroclaw mcp status             # show token status for all OAuth MCP servers")]
+    Mcp {
+        #[command(subcommand)]
+        mcp_command: McpCommands,
     },
 
     /// Migrate data from other agent runtimes
@@ -1007,6 +1021,8 @@ async fn main() -> Result<()> {
 
         Commands::Skills { skill_command } => skills::handle_command(skill_command, &config),
 
+        Commands::Mcp { mcp_command } => handle_mcp_command(mcp_command, &config).await,
+
         Commands::Migrate { migrate_command } => {
             migration::handle_command(migrate_command, &config).await
         }
@@ -1035,6 +1051,129 @@ async fn main() -> Result<()> {
                 Ok(())
             }
         },
+    }
+}
+
+async fn handle_mcp_command(mcp_command: McpCommands, config: &Config) -> Result<()> {
+    let zeroclaw_dir = config
+        .config_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Cannot determine ZeroClaw config directory"))?;
+
+    match mcp_command {
+        McpCommands::Auth { server } => {
+            // Look up the server in config.
+            let server_config = config.mcp.servers.get(&server).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "MCP server '{server}' not found in config. \
+                         Available servers: {}",
+                    config
+                        .mcp
+                        .servers
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
+
+            let (url, auth_config) = match &server_config.transport {
+                config::McpTransportConfig::Http { url, auth, .. } => {
+                    let auth = auth.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "MCP server '{server}' does not have OAuth auth configured. \
+                             Add [mcp.servers.{server}.transport.auth] to your config."
+                        )
+                    })?;
+                    (url.clone(), auth.clone())
+                }
+                config::McpTransportConfig::Stdio { .. } => {
+                    bail!("MCP server '{server}' uses stdio transport, not HTTP. OAuth is only for HTTP servers.");
+                }
+            };
+
+            // Expand URL env vars.
+            let expanded_url = tools::mcp::env_expand::expand_env_vars(&url)?;
+
+            // Discover auth server.
+            println!("Discovering authorization server for '{server}'...");
+            let meta = tools::mcp::oauth::discover_auth_server(&expanded_url, &auth_config).await?;
+
+            println!("Authorization endpoint: {}", meta.authorization_endpoint);
+            println!("Token endpoint: {}", meta.token_endpoint);
+            if let Some(ref reg) = meta.registration_endpoint {
+                println!("Registration endpoint: {reg}");
+            }
+
+            // Run authorization flow.
+            let tokens =
+                tools::mcp::oauth::authorize(&server, &expanded_url, &auth_config, &meta).await?;
+
+            // Save tokens.
+            tools::mcp::oauth::save_tokens(zeroclaw_dir, &server, &tokens).await?;
+
+            println!();
+            println!("OAuth tokens saved for '{server}'.");
+            if tokens.refresh_token.is_some() {
+                println!("Refresh token stored — tokens will auto-refresh on expiry.");
+            }
+            if let Some(exp) = tokens.expires_at {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                if exp > now {
+                    let remaining = exp - now;
+                    let hours = remaining / 3600;
+                    let mins = (remaining % 3600) / 60;
+                    println!("Token expires in {hours}h {mins}m.");
+                }
+            }
+            println!("MCP server '{server}' is now ready to use.");
+            Ok(())
+        }
+
+        McpCommands::Status => {
+            let statuses =
+                tools::mcp::oauth::get_all_token_status(zeroclaw_dir, &config.mcp.servers).await;
+
+            if statuses.is_empty() {
+                println!("No OAuth-configured MCP servers found.");
+                return Ok(());
+            }
+
+            println!("MCP OAuth Token Status:");
+            println!();
+            for s in &statuses {
+                let token_status = if !s.has_token {
+                    "no token (run `zeroclaw mcp auth <server>`)".to_string()
+                } else if s.expired {
+                    if s.has_refresh {
+                        "expired (will auto-refresh)".to_string()
+                    } else {
+                        "expired (re-authorize needed)".to_string()
+                    }
+                } else if let Some(exp) = s.expires_at {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    if exp > now {
+                        let remaining = exp - now;
+                        let hours = remaining / 3600;
+                        let mins = (remaining % 3600) / 60;
+                        format!("valid (expires in {hours}h {mins}m)")
+                    } else {
+                        "valid (no expiry)".to_string()
+                    }
+                } else {
+                    "valid (no expiry)".to_string()
+                };
+
+                println!("  {}: {}", s.server_key, token_status);
+            }
+            Ok(())
+        }
     }
 }
 

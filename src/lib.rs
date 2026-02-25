@@ -160,6 +160,28 @@ pub enum SkillCommands {
     },
 }
 
+/// MCP server management subcommands
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum McpCommands {
+    /// Authorize with an OAuth-protected MCP server
+    #[command(long_about = "\
+Authorize with an OAuth-protected MCP server.
+
+Runs the OAuth 2.1 authorization flow (PKCE) for a configured MCP server \
+that has `auth` set in its transport config. Opens a local callback server \
+and prints the authorization URL for you to open in a browser.
+
+Examples:
+  zeroclaw mcp auth fellow
+  zeroclaw mcp auth my-server")]
+    Auth {
+        /// MCP server key (as defined in config.toml [mcp.servers.<key>])
+        server: String,
+    },
+    /// Show OAuth token status for all configured MCP servers
+    Status,
+}
+
 /// Migration subcommands
 #[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MigrateCommands {

@@ -1,12 +1,14 @@
 pub mod bridge;
 pub mod client;
 pub mod env_expand;
+pub mod oauth;
 
 use crate::config::{McpConfig, McpTransportConfig};
 use crate::tools::traits::Tool;
 use bridge::McpBridgeTool;
 use client::McpClientHandle;
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 
 /// Connect to configured MCP servers and return bridge tools for each discovered tool.
@@ -16,8 +18,12 @@ use std::sync::Arc;
 ///
 /// The second vec contains client handles that must be kept alive for the duration
 /// of the agent session (they own the child processes and transport connections).
+///
+/// `zeroclaw_dir` is the ZeroClaw configuration directory (e.g. `~/.zeroclaw/`),
+/// used for loading OAuth tokens for servers with `auth` configured.
 pub async fn create_mcp_tools(
     config: &McpConfig,
+    zeroclaw_dir: &Path,
 ) -> (Vec<Box<dyn Tool>>, Vec<Arc<McpClientHandle>>) {
     if !config.enabled || config.servers.is_empty() {
         return (Vec::new(), Vec::new());
@@ -62,7 +68,7 @@ pub async fn create_mcp_tools(
                 )
                 .await
             }
-            McpTransportConfig::Http { url, headers } => {
+            McpTransportConfig::Http { url, headers, auth } => {
                 let expanded_url = match env_expand::expand_env_vars(url) {
                     Ok(u) => u,
                     Err(err) => {
@@ -73,7 +79,7 @@ pub async fn create_mcp_tools(
                         continue;
                     }
                 };
-                let expanded_headers = match env_expand::expand_env_map(headers) {
+                let mut expanded_headers = match env_expand::expand_env_map(headers) {
                     Ok(h) => h,
                     Err(err) => {
                         tracing::warn!(
@@ -83,6 +89,31 @@ pub async fn create_mcp_tools(
                         continue;
                     }
                 };
+
+                // If OAuth is configured, resolve stored token and inject as Authorization header.
+                if auth.is_some() {
+                    match oauth::resolve_token(
+                        zeroclaw_dir,
+                        server_key,
+                        &expanded_url,
+                        auth.as_ref().unwrap(),
+                    )
+                    .await
+                    {
+                        Ok(token) => {
+                            expanded_headers
+                                .insert("Authorization".to_string(), format!("Bearer {token}"));
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                server = %server_key,
+                                "MCP OAuth token resolution failed: {err}, skipping"
+                            );
+                            continue;
+                        }
+                    }
+                }
+
                 McpClientHandle::connect_http(
                     server_key,
                     &expanded_url,

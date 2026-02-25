@@ -965,7 +965,40 @@ pub enum McpTransportConfig {
         /// Values support `${ENV_VAR}` syntax for secret injection.
         #[serde(default)]
         headers: HashMap<String, String>,
+        /// OAuth 2.1 authentication (optional). When set, token acquisition
+        /// and refresh are handled automatically via `zeroclaw mcp auth <server>`.
+        #[serde(default)]
+        auth: Option<McpAuthConfig>,
     },
+}
+
+/// OAuth 2.1 authentication configuration for an MCP server.
+///
+/// When present on an HTTP transport, ZeroClaw will:
+/// 1. Discover the authorization server via RFC 9728 Protected Resource Metadata
+/// 2. Optionally register via Dynamic Client Registration (RFC 7591)
+/// 3. Run an Authorization Code + PKCE flow to obtain tokens
+/// 4. Automatically refresh tokens at connect time
+///
+/// Run `zeroclaw mcp auth <server_key>` to complete the interactive authorization.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct McpAuthConfig {
+    /// OAuth client_id. If omitted, Dynamic Client Registration is attempted.
+    #[serde(default)]
+    pub client_id: Option<String>,
+    /// OAuth client_secret (for confidential clients). Supports `enc2:` prefix.
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    /// Override authorization server metadata URL.
+    /// If omitted, discovered via `.well-known/oauth-protected-resource` from the MCP server URL.
+    #[serde(default)]
+    pub authorization_server: Option<String>,
+    /// OAuth scopes to request.
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    /// Local port for OAuth callback (default: random available port).
+    #[serde(default)]
+    pub callback_port: Option<u16>,
 }
 
 // ── Secrets (encrypted credential store) ────────────────────────

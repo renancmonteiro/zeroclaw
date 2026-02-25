@@ -10,7 +10,7 @@ pub use schema::{
     CronConfig, DelegateAgentConfig, DiscordConfig, DockerRuntimeConfig, EmbeddingRouteConfig,
     EstopConfig, FeishuConfig, GatewayConfig, HardwareConfig, HardwareTransport, HeartbeatConfig,
     HooksConfig, HttpRequestConfig, IMessageConfig, IdentityConfig, LarkConfig, MatrixConfig,
-    McpConfig, McpServerConfig, McpTransportConfig, MemoryConfig, ModelRouteConfig,
+    McpAuthConfig, McpConfig, McpServerConfig, McpTransportConfig, MemoryConfig, ModelRouteConfig,
     MultimodalConfig, NextcloudTalkConfig, ObservabilityConfig, OtpConfig, OtpMethod,
     PeripheralBoardConfig, PeripheralsConfig, ProxyConfig, ProxyScope, QdrantConfig,
     QueryClassificationConfig, ReliabilityConfig, ResourceLimitsConfig, RuntimeConfig,

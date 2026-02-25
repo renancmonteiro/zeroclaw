@@ -2792,7 +2792,12 @@ pub async fn run(
     }
 
     // ── MCP tools (connect to external MCP servers) ─────────────
-    let (mcp_tools, _mcp_clients) = crate::tools::mcp::create_mcp_tools(&config.mcp).await;
+    let zeroclaw_dir = config
+        .config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    let (mcp_tools, _mcp_clients) =
+        crate::tools::mcp::create_mcp_tools(&config.mcp, zeroclaw_dir).await;
     if !mcp_tools.is_empty() {
         tracing::info!(count = mcp_tools.len(), "MCP tools added");
         tools_registry.extend(mcp_tools);
@@ -3263,7 +3268,12 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
     tools_registry.extend(peripheral_tools);
 
     // ── MCP tools (connect to external MCP servers) ─────────────
-    let (mcp_tools, _mcp_clients) = crate::tools::mcp::create_mcp_tools(&config.mcp).await;
+    let zeroclaw_dir_msg = config
+        .config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    let (mcp_tools, _mcp_clients) =
+        crate::tools::mcp::create_mcp_tools(&config.mcp, zeroclaw_dir_msg).await;
     if !mcp_tools.is_empty() {
         tracing::info!(count = mcp_tools.len(), "MCP tools added");
         tools_registry.extend(mcp_tools);

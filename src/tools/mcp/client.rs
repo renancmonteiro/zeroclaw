@@ -82,9 +82,10 @@ impl McpClientHandle {
                     .unwrap_or(v);
                 auth_header = Some(token.to_string());
             } else {
-                let name = reqwest::header::HeaderName::from_bytes(k.as_bytes()).with_context(|| {
-                    format!("Invalid HTTP header name '{k}' for MCP server '{server_name}'")
-                })?;
+                let name =
+                    reqwest::header::HeaderName::from_bytes(k.as_bytes()).with_context(|| {
+                        format!("Invalid HTTP header name '{k}' for MCP server '{server_name}'")
+                    })?;
                 let value = reqwest::header::HeaderValue::from_str(v).with_context(|| {
                     format!("Invalid HTTP header value for '{k}' on MCP server '{server_name}'")
                 })?;
@@ -100,8 +101,7 @@ impl McpClientHandle {
             config = config.custom_headers(custom_headers);
         }
 
-        let transport =
-            StreamableHttpClientTransport::<reqwest::Client>::from_config(config);
+        let transport = StreamableHttpClientTransport::<reqwest::Client>::from_config(config);
 
         let service: RunningService<RoleClient, ()> =
             tokio::time::timeout(connect_timeout, ().serve(transport))

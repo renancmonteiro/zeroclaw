@@ -3109,10 +3109,17 @@ pub async fn start_channels(config: Config) -> Result<()> {
     );
 
     // ── MCP tools (connect to external MCP servers) ─────────────
+    let zeroclaw_dir = config
+        .config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
     let (mcp_tools, _mcp_clients) =
-        crate::tools::mcp::create_mcp_tools(&config.mcp).await;
+        crate::tools::mcp::create_mcp_tools(&config.mcp, zeroclaw_dir).await;
     if !mcp_tools.is_empty() {
-        tracing::info!(count = mcp_tools.len(), "MCP tools added to channel runtime");
+        tracing::info!(
+            count = mcp_tools.len(),
+            "MCP tools added to channel runtime"
+        );
         tools_vec.extend(mcp_tools);
     }
 
