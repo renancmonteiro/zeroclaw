@@ -3092,7 +3092,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
     };
     // Build system prompt from workspace identity files + skills
     let workspace = config.workspace_dir.clone();
-    let tools_registry = Arc::new(tools::all_tools_with_runtime(
+    let mut tools_vec = tools::all_tools_with_runtime(
         Arc::new(config.clone()),
         &security,
         runtime,
@@ -3106,7 +3106,17 @@ pub async fn start_channels(config: Config) -> Result<()> {
         &config.agents,
         config.api_key.as_deref(),
         &config,
-    ));
+    );
+
+    // ── MCP tools (connect to external MCP servers) ─────────────
+    let (mcp_tools, _mcp_clients) =
+        crate::tools::mcp::create_mcp_tools(&config.mcp).await;
+    if !mcp_tools.is_empty() {
+        tracing::info!(count = mcp_tools.len(), "MCP tools added to channel runtime");
+        tools_vec.extend(mcp_tools);
+    }
+
+    let tools_registry = Arc::new(tools_vec);
 
     let skills = crate::skills::load_skills_with_config(&workspace, &config);
 

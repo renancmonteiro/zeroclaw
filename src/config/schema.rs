@@ -38,6 +38,7 @@ const SUPPORTED_PROXY_SERVICE_KEYS: &[&str] = &[
     "tool.browser",
     "tool.composio",
     "tool.http_request",
+    "tool.mcp",
     "tool.pushover",
     "memory.embeddings",
     "tunnel.custom",
@@ -161,6 +162,10 @@ pub struct Config {
     /// Composio managed OAuth tools integration (`[composio]`).
     #[serde(default)]
     pub composio: ComposioConfig,
+
+    /// MCP client integration for external tool servers (`[mcp]`).
+    #[serde(default)]
+    pub mcp: McpConfig,
 
     /// Secrets encryption configuration (`[secrets]`).
     #[serde(default)]
@@ -884,6 +889,85 @@ impl Default for ComposioConfig {
     }
 }
 
+// ── MCP (Model Context Protocol client) ─────────────────────────
+
+/// MCP client integration configuration (`[mcp]` section).
+///
+/// Connects to external MCP servers and registers their tools individually.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct McpConfig {
+    /// Enable MCP client support
+    #[serde(default, alias = "enable")]
+    pub enabled: bool,
+    /// Named MCP server configurations
+    #[serde(default)]
+    pub servers: HashMap<String, McpServerConfig>,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            servers: HashMap::new(),
+        }
+    }
+}
+
+/// Configuration for a single MCP server connection.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct McpServerConfig {
+    /// Enable/disable this specific server (default: true)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Transport configuration (stdio or http)
+    pub transport: McpTransportConfig,
+    /// Tool name prefix. Defaults to the server key name.
+    /// Tools are registered as `mcp_{prefix}__{tool_name}`.
+    #[serde(default)]
+    pub tool_prefix: Option<String>,
+    /// Connection timeout in seconds (default: 30)
+    #[serde(default = "default_mcp_connect_timeout")]
+    pub connect_timeout_secs: u64,
+    /// Per-tool-call timeout in seconds (default: 120)
+    #[serde(default = "default_mcp_call_timeout")]
+    pub call_timeout_secs: u64,
+}
+
+fn default_mcp_connect_timeout() -> u64 {
+    30
+}
+
+fn default_mcp_call_timeout() -> u64 {
+    120
+}
+
+/// Transport configuration for an MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum McpTransportConfig {
+    /// Stdio transport: spawn MCP server as a child process
+    Stdio {
+        /// Command to execute (e.g. "npx", "uvx", "node", path to binary)
+        command: String,
+        /// Arguments to pass to the command
+        #[serde(default)]
+        args: Vec<String>,
+        /// Environment variables for the subprocess.
+        /// Values support `${ENV_VAR}` syntax for secret injection.
+        #[serde(default)]
+        env: HashMap<String, String>,
+    },
+    /// Streamable HTTP transport: connect to a remote MCP server
+    Http {
+        /// Server URL (e.g. "https://mcp.example.com/mcp")
+        url: String,
+        /// HTTP headers (e.g. for Authorization).
+        /// Values support `${ENV_VAR}` syntax for secret injection.
+        #[serde(default)]
+        headers: HashMap<String, String>,
+    },
+}
+
 // ── Secrets (encrypted credential store) ────────────────────────
 
 /// Secrets encryption configuration (`[secrets]` section).
@@ -960,8 +1044,8 @@ pub struct BrowserConfig {
     /// Enable `browser_open` tool (opens URLs in the system browser without scraping)
     #[serde(default)]
     pub enabled: bool,
-    /// Allowed domains for `browser_open` (exact or subdomain match)
-    #[serde(default)]
+    /// Allowed domains for `browser_open` (exact or subdomain match; `["*"]` = all public hosts). Default: `["*"]`.
+    #[serde(default = "default_allowed_domains_wildcard")]
     pub allowed_domains: Vec<String>,
     /// Browser session name (for agent-browser automation)
     #[serde(default)]
@@ -995,7 +1079,7 @@ impl Default for BrowserConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            allowed_domains: Vec::new(),
+            allowed_domains: default_allowed_domains_wildcard(),
             session_name: None,
             backend: default_browser_backend(),
             native_headless: default_true(),
@@ -1010,14 +1094,15 @@ impl Default for BrowserConfig {
 
 /// HTTP request tool configuration (`[http_request]` section).
 ///
-/// Deny-by-default: if `allowed_domains` is empty, all HTTP requests are rejected.
+/// Default: `allowed_domains = ["*"]` (all public hosts). If `allowed_domains` is
+/// explicitly set to `[]`, all HTTP requests are rejected.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HttpRequestConfig {
     /// Enable `http_request` tool for API interactions
     #[serde(default)]
     pub enabled: bool,
-    /// Allowed domains for HTTP requests (exact or subdomain match)
-    #[serde(default)]
+    /// Allowed domains for HTTP requests (exact or subdomain match; `["*"]` = all public hosts). Default: `["*"]`.
+    #[serde(default = "default_allowed_domains_wildcard")]
     pub allowed_domains: Vec<String>,
     /// Maximum response size in bytes (default: 1MB, 0 = unlimited)
     #[serde(default = "default_http_max_response_size")]
@@ -1031,7 +1116,7 @@ impl Default for HttpRequestConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            allowed_domains: vec![],
+            allowed_domains: default_allowed_domains_wildcard(),
             max_response_size: default_http_max_response_size(),
             timeout_secs: default_http_timeout_secs(),
         }
@@ -1044,6 +1129,10 @@ fn default_http_max_response_size() -> usize {
 
 fn default_http_timeout_secs() -> u64 {
     30
+}
+
+fn default_allowed_domains_wildcard() -> Vec<String> {
+    vec!["*".into()]
 }
 
 // ── Web fetch ────────────────────────────────────────────────────
@@ -1059,8 +1148,8 @@ pub struct WebFetchConfig {
     /// Enable `web_fetch` tool for fetching web page content
     #[serde(default)]
     pub enabled: bool,
-    /// Allowed domains for web fetch (exact or subdomain match; `["*"]` = all public hosts)
-    #[serde(default)]
+    /// Allowed domains for web fetch (exact or subdomain match; `["*"]` = all public hosts). Default: `["*"]`.
+    #[serde(default = "default_allowed_domains_wildcard")]
     pub allowed_domains: Vec<String>,
     /// Blocked domains (exact or subdomain match; always takes priority over allowed_domains)
     #[serde(default)]
@@ -3614,6 +3703,7 @@ impl Default for Config {
             tunnel: TunnelConfig::default(),
             gateway: GatewayConfig::default(),
             composio: ComposioConfig::default(),
+            mcp: McpConfig::default(),
             secrets: SecretsConfig::default(),
             browser: BrowserConfig::default(),
             http_request: HttpRequestConfig::default(),
@@ -4853,7 +4943,7 @@ mod tests {
         assert_eq!(cfg.timeout_secs, 30);
         assert_eq!(cfg.max_response_size, 1_000_000);
         assert!(!cfg.enabled);
-        assert!(cfg.allowed_domains.is_empty());
+        assert_eq!(cfg.allowed_domains, vec!["*".to_string()]);
     }
 
     #[test]
@@ -5146,6 +5236,7 @@ default_temperature = 0.7
             tunnel: TunnelConfig::default(),
             gateway: GatewayConfig::default(),
             composio: ComposioConfig::default(),
+            mcp: McpConfig::default(),
             secrets: SecretsConfig::default(),
             browser: BrowserConfig::default(),
             http_request: HttpRequestConfig::default(),
@@ -5328,6 +5419,7 @@ tool_dispatcher = "xml"
             tunnel: TunnelConfig::default(),
             gateway: GatewayConfig::default(),
             composio: ComposioConfig::default(),
+            mcp: McpConfig::default(),
             secrets: SecretsConfig::default(),
             browser: BrowserConfig::default(),
             http_request: HttpRequestConfig::default(),
@@ -6155,14 +6247,14 @@ default_temperature = 0.7
         assert!(c.composio.api_key.is_none());
         assert!(c.secrets.encrypt);
         assert!(!c.browser.enabled);
-        assert!(c.browser.allowed_domains.is_empty());
+        assert_eq!(c.browser.allowed_domains, vec!["*".to_string()]);
     }
 
     #[test]
     async fn browser_config_default_disabled() {
         let b = BrowserConfig::default();
         assert!(!b.enabled);
-        assert!(b.allowed_domains.is_empty());
+        assert_eq!(b.allowed_domains, vec!["*".to_string()]);
         assert_eq!(b.backend, "agent_browser");
         assert!(b.native_headless);
         assert_eq!(b.native_webdriver_url, "http://127.0.0.1:9515");
@@ -6228,7 +6320,97 @@ default_temperature = 0.7
 "#;
         let parsed: Config = toml::from_str(minimal).unwrap();
         assert!(!parsed.browser.enabled);
-        assert!(parsed.browser.allowed_domains.is_empty());
+        assert_eq!(parsed.browser.allowed_domains, vec!["*".to_string()]);
+    }
+
+    // ── Allowed-domains wildcard serde defaults ─────────────────
+
+    #[test]
+    async fn web_fetch_defaults_wildcard_when_section_missing() {
+        let toml_str = r#"
+workspace_dir = "/tmp/ws"
+config_path = "/tmp/config.toml"
+default_temperature = 0.7
+"#;
+        let parsed: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(parsed.web_fetch.allowed_domains, vec!["*".to_string()]);
+        assert!(!parsed.web_fetch.enabled);
+    }
+
+    #[test]
+    async fn web_fetch_defaults_wildcard_when_field_missing() {
+        let toml_str = r#"
+workspace_dir = "/tmp/ws"
+config_path = "/tmp/config.toml"
+default_temperature = 0.7
+
+[web_fetch]
+enabled = true
+"#;
+        let parsed: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(parsed.web_fetch.allowed_domains, vec!["*".to_string()]);
+        assert!(parsed.web_fetch.enabled);
+    }
+
+    #[test]
+    async fn web_fetch_respects_explicit_empty_allowed_domains() {
+        let toml_str = r#"
+workspace_dir = "/tmp/ws"
+config_path = "/tmp/config.toml"
+default_temperature = 0.7
+
+[web_fetch]
+enabled = true
+allowed_domains = []
+"#;
+        let parsed: Config = toml::from_str(toml_str).unwrap();
+        assert!(parsed.web_fetch.allowed_domains.is_empty());
+    }
+
+    #[test]
+    async fn web_fetch_respects_explicit_allowed_domains() {
+        let toml_str = r#"
+workspace_dir = "/tmp/ws"
+config_path = "/tmp/config.toml"
+default_temperature = 0.7
+
+[web_fetch]
+enabled = true
+allowed_domains = ["example.com"]
+"#;
+        let parsed: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            parsed.web_fetch.allowed_domains,
+            vec!["example.com".to_string()]
+        );
+    }
+
+    #[test]
+    async fn http_request_defaults_wildcard_when_field_missing() {
+        let toml_str = r#"
+workspace_dir = "/tmp/ws"
+config_path = "/tmp/config.toml"
+default_temperature = 0.7
+
+[http_request]
+enabled = true
+"#;
+        let parsed: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(parsed.http_request.allowed_domains, vec!["*".to_string()]);
+    }
+
+    #[test]
+    async fn browser_defaults_wildcard_when_field_missing() {
+        let toml_str = r#"
+workspace_dir = "/tmp/ws"
+config_path = "/tmp/config.toml"
+default_temperature = 0.7
+
+[browser]
+enabled = true
+"#;
+        let parsed: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(parsed.browser.allowed_domains, vec!["*".to_string()]);
     }
 
     // ── Environment variable overrides (Docker support) ─────────

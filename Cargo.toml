@@ -26,7 +26,7 @@ tokio-util = { version = "0.7", default-features = false }
 tokio-stream = { version = "0.1.18", default-features = false, features = ["fs", "sync"] }
 
 # HTTP client - minimal features
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking", "multipart", "stream", "socks"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "blocking", "multipart", "stream", "socks", "form", "query"] }
 
 # Matrix client + E2EE decryption
 matrix-sdk = { version = "0.16", optional = true, default-features = false, features = ["e2e-encryption", "rustls-tls", "markdown", "sqlite"] }
@@ -90,6 +90,9 @@ parking_lot = "0.12"
 
 # Async traits
 async-trait = "0.1"
+
+# MCP client (Model Context Protocol) — always compiled, enabled via config
+rmcp = { version = "0.16", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
 # HMAC-SHA256 (Zhipu/GLM JWT auth)
 ring = "0.17"

@@ -2791,6 +2791,13 @@ pub async fn run(
         tools_registry.extend(peripheral_tools);
     }
 
+    // ── MCP tools (connect to external MCP servers) ─────────────
+    let (mcp_tools, _mcp_clients) = crate::tools::mcp::create_mcp_tools(&config.mcp).await;
+    if !mcp_tools.is_empty() {
+        tracing::info!(count = mcp_tools.len(), "MCP tools added");
+        tools_registry.extend(mcp_tools);
+    }
+
     // ── Resolve provider ─────────────────────────────────────────
     let provider_name = provider_override
         .as_deref()
@@ -3254,6 +3261,13 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
     let peripheral_tools: Vec<Box<dyn Tool>> =
         crate::peripherals::create_peripheral_tools(&config.peripherals).await?;
     tools_registry.extend(peripheral_tools);
+
+    // ── MCP tools (connect to external MCP servers) ─────────────
+    let (mcp_tools, _mcp_clients) = crate::tools::mcp::create_mcp_tools(&config.mcp).await;
+    if !mcp_tools.is_empty() {
+        tracing::info!(count = mcp_tools.len(), "MCP tools added");
+        tools_registry.extend(mcp_tools);
+    }
 
     let provider_name = config.default_provider.as_deref().unwrap_or("openrouter");
     let model_name = config

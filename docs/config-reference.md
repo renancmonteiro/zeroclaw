@@ -220,6 +220,70 @@ Notes:
 - Typical flow: call `connect`, complete browser OAuth, then run `execute` for the desired tool action.
 - If Composio returns a missing connected-account reference error, call `list_accounts` (optionally with `app`) and pass the returned `connected_account_id` to `execute`.
 
+## `[mcp]`
+
+| Key | Default | Purpose |
+|---|---|---|
+| `enabled` | `false` | Enable MCP (Model Context Protocol) client support |
+| `servers` | `{}` | Named MCP server configurations (table of tables) |
+
+### `[mcp.servers.<name>]`
+
+| Key | Default | Purpose |
+|---|---|---|
+| `enabled` | `true` | Enable/disable this specific server |
+| `transport` | (required) | Transport configuration (see below) |
+| `tool_prefix` | server key name | Prefix for registered tool names |
+| `connect_timeout_secs` | `30` | Connection timeout in seconds |
+| `call_timeout_secs` | `120` | Per-tool-call timeout in seconds |
+
+### Transport: stdio (`transport.type = "stdio"`)
+
+| Key | Purpose |
+|---|---|
+| `command` | Command to spawn the MCP server process |
+| `args` | Arguments passed to the command |
+| `env` | Environment variables; values support `${ENV_VAR}` expansion |
+
+### Transport: http (`transport.type = "http"`)
+
+| Key | Purpose |
+|---|---|
+| `url` | Server URL (supports `${ENV_VAR}` expansion) |
+| `headers` | HTTP headers; values support `${ENV_VAR}` expansion |
+
+Notes:
+
+- Each server's tools are registered individually with names like `mcp_<prefix>__<tool_name>`.
+- If a server fails to connect, its tools are skipped with a warning; other servers proceed normally.
+- Environment variable expansion (`${VAR}`) is resolved at connection time, not at config parse time.
+- Tool name collisions across servers are resolved first-registered-wins with a warning.
+- HTTP transport uses streamable HTTP (SSE-based). The `Authorization` header is handled specially — its value is passed as a bearer token.
+
+Example:
+
+```toml
+[mcp]
+enabled = true
+
+[mcp.servers.github]
+tool_prefix = "github"
+
+[mcp.servers.github.transport]
+type = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_TOKEN = "${GITHUB_TOKEN}" }
+
+[mcp.servers.filesystem]
+tool_prefix = "fs"
+
+[mcp.servers.filesystem.transport]
+type = "stdio"
+command = "mcp-server-filesystem"
+args = ["/home/user/docs"]
+```
+
 ## `[cost]`
 
 | Key | Default | Purpose |
@@ -272,7 +336,7 @@ Notes:
 | Key | Default | Purpose |
 |---|---|---|
 | `enabled` | `false` | Enable `browser_open` tool (opens URLs in the system browser without scraping) |
-| `allowed_domains` | `[]` | Allowed domains for `browser_open` (exact/subdomain match, or `"*"` for all public domains) |
+| `allowed_domains` | `["*"]` | Allowed domains for `browser_open` (exact/subdomain match, or `"*"` for all public domains) |
 | `session_name` | unset | Browser session name (for agent-browser automation) |
 | `backend` | `agent_browser` | Browser automation backend: `"agent_browser"`, `"rust_native"`, `"computer_use"`, or `"auto"` |
 | `native_headless` | `true` | Headless mode for rust-native backend |
@@ -302,15 +366,31 @@ Notes:
 | Key | Default | Purpose |
 |---|---|---|
 | `enabled` | `false` | Enable `http_request` tool for API interactions |
-| `allowed_domains` | `[]` | Allowed domains for HTTP requests (exact/subdomain match, or `"*"` for all public domains) |
+| `allowed_domains` | `["*"]` | Allowed domains for HTTP requests (exact/subdomain match, or `"*"` for all public domains) |
 | `max_response_size` | `1000000` | Maximum response size in bytes (default: 1 MB) |
 | `timeout_secs` | `30` | Request timeout in seconds |
 
 Notes:
 
-- Deny-by-default: if `allowed_domains` is empty, all HTTP requests are rejected.
+- Default allows all public domains (`["*"]`). Set `allowed_domains = []` to deny all requests.
 - Use exact domain or subdomain matching (e.g. `"api.example.com"`, `"example.com"`), or `"*"` to allow any public domain.
 - Local/private targets are still blocked even when `"*"` is configured.
+
+## `[web_fetch]`
+
+| Key | Default | Purpose |
+|---|---|---|
+| `enabled` | `false` | Enable `web_fetch` tool for fetching web page content |
+| `allowed_domains` | `["*"]` | Allowed domains (exact/subdomain match, or `"*"` for all public domains) |
+| `blocked_domains` | `[]` | Blocked domains (always takes priority over `allowed_domains`) |
+| `max_response_size` | `500000` | Maximum response size in bytes (default: 500 KB) |
+| `timeout_secs` | `30` | Request timeout in seconds |
+
+Notes:
+
+- Default allows all public domains (`["*"]`). Private/local targets are still blocked.
+- Use `blocked_domains` to deny specific hosts even with `allowed_domains = ["*"]`.
+- Set `allowed_domains = []` to explicitly deny all requests.
 
 ## `[gateway]`
 

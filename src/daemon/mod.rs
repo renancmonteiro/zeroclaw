@@ -1,6 +1,7 @@
 use crate::config::Config;
 use anyhow::Result;
 use chrono::Utc;
+use std::fs::File;
 use std::future::Future;
 use std::path::PathBuf;
 use tokio::task::JoinHandle;
@@ -9,6 +10,9 @@ use tokio::time::Duration;
 const STATUS_FLUSH_SECONDS: u64 = 5;
 
 pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
+    // Hold the lock guard for the entire daemon lifetime; dropping it releases the lock.
+    let _lock = acquire_daemon_lock(&config)?;
+
     let initial_backoff = config.reliability.channel_initial_backoff_secs.max(1);
     let max_backoff = config
         .reliability
@@ -318,6 +322,57 @@ fn validate_heartbeat_channel_config(config: &Config, channel: &str) -> Result<(
     Ok(())
 }
 
+fn daemon_lock_path(config: &Config) -> PathBuf {
+    config
+        .config_path
+        .parent()
+        .map_or_else(|| PathBuf::from("."), PathBuf::from)
+        .join("zeroclaw.lock")
+}
+
+/// Acquire an exclusive file lock to ensure only one daemon runs per config directory.
+/// Returns the open `File` whose lifetime holds the lock.
+fn acquire_daemon_lock(config: &Config) -> Result<File> {
+    let lock_path = daemon_lock_path(config);
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let file = File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc != 0 {
+            anyhow::bail!(
+                "Another zeroclaw daemon is already running (lock held on {}). \
+                 Stop the existing process before starting a new one.",
+                lock_path.display()
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        // On Windows, File::try_lock_exclusive is not yet stable; fall back to a
+        // best-effort write-lock approach. The lock file existing is not sufficient
+        // since stale files can remain, so this is advisory on Windows.
+        tracing::debug!("Daemon lock is advisory on Windows; flock not available");
+    }
+
+    // Write PID for diagnostics
+    use std::io::Write;
+    let mut f = &file;
+    let _ = f.write_all(format!("{}", std::process::id()).as_bytes());
+
+    Ok(file)
+}
+
 fn has_supervised_channels(config: &Config) -> bool {
     config
         .channels_config
@@ -348,6 +403,31 @@ mod tests {
 
         let path = state_file_path(&config);
         assert_eq!(path, tmp.path().join("daemon_state.json"));
+    }
+
+    #[test]
+    fn daemon_lock_prevents_second_instance() {
+        let tmp = TempDir::new().unwrap();
+        let config = test_config(&tmp);
+
+        let _lock = acquire_daemon_lock(&config).expect("first lock should succeed");
+        let err = acquire_daemon_lock(&config).expect_err("second lock should fail");
+        assert!(
+            err.to_string().contains("Another zeroclaw daemon"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn daemon_lock_released_on_drop() {
+        let tmp = TempDir::new().unwrap();
+        let config = test_config(&tmp);
+
+        {
+            let _lock = acquire_daemon_lock(&config).expect("first lock should succeed");
+        }
+        // After drop, a new lock should succeed
+        let _lock = acquire_daemon_lock(&config).expect("lock after drop should succeed");
     }
 
     #[tokio::test]
