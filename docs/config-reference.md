@@ -2,7 +2,7 @@
 
 This is a high-signal reference for common config sections and defaults.
 
-Last verified: **February 25, 2026**.
+Last verified: **February 21, 2026**.
 
 Config path resolution at startup:
 
@@ -23,17 +23,8 @@ Schema export command:
 | Key | Default | Notes |
 |---|---|---|
 | `default_provider` | `openrouter` | provider ID or alias |
-| `provider_api` | unset | Optional API mode for `custom:<url>` providers: `openai-chat-completions` or `openai-responses` |
 | `default_model` | `anthropic/claude-sonnet-4-6` | model routed through selected provider |
 | `default_temperature` | `0.7` | model temperature |
-| `model_support_vision` | unset (`None`) | Vision support override for active provider/model |
-
-Notes:
-
-- `model_support_vision = true` forces vision support on (e.g. Ollama running `llava`).
-- `model_support_vision = false` forces vision support off.
-- Unset keeps the provider's built-in default.
-- Environment override: `ZEROCLAW_MODEL_SUPPORT_VISION` or `MODEL_SUPPORT_VISION` (values: `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`).
 
 ## `[observability]`
 
@@ -80,10 +71,6 @@ Operational note for container users:
 
 - If your `config.toml` sets an explicit custom provider like `custom:https://.../v1`, a default `PROVIDER=openrouter` from Docker/container env will no longer replace it.
 - Use `ZEROCLAW_PROVIDER` when you intentionally want runtime env to override a non-default configured provider.
-- For OpenAI-compatible Responses fallback transport:
-  - `ZEROCLAW_RESPONSES_WEBSOCKET=1` forces websocket-first mode (`wss://.../responses`) for compatible providers.
-  - `ZEROCLAW_RESPONSES_WEBSOCKET=0` forces HTTP-only mode.
-  - Unset = auto (websocket-first only when endpoint host is `api.openai.com`, then HTTP fallback if websocket fails).
 
 ## `[agent]`
 
@@ -148,42 +135,6 @@ Notes:
 - Corrupted/unreadable estop state falls back to fail-closed `kill_all`.
 - Use CLI command `zeroclaw estop` to engage and `zeroclaw estop resume` to clear levels.
 
-## `[security.syscall_anomaly]`
-
-| Key | Default | Purpose |
-|---|---|---|
-| `enabled` | `true` | Enable syscall anomaly detection over command output telemetry |
-| `strict_mode` | `false` | Emit anomaly when denied syscalls are observed even if in baseline |
-| `alert_on_unknown_syscall` | `true` | Alert on syscall names not present in baseline |
-| `max_denied_events_per_minute` | `5` | Threshold for denied-syscall spike alerts |
-| `max_total_events_per_minute` | `120` | Threshold for total syscall-event spike alerts |
-| `max_alerts_per_minute` | `30` | Global alert budget guardrail per rolling minute |
-| `alert_cooldown_secs` | `20` | Cooldown between identical anomaly alerts |
-| `log_path` | `syscall-anomalies.log` | JSONL anomaly log path |
-| `baseline_syscalls` | built-in allowlist | Expected syscall profile; unknown entries trigger alerts |
-
-Notes:
-
-- Detection consumes seccomp/audit hints from command `stdout`/`stderr`.
-- Numeric syscall IDs in Linux audit lines are mapped to common x86_64 names when available.
-- Alert budget and cooldown reduce duplicate/noisy events during repeated retries.
-- `max_denied_events_per_minute` must be less than or equal to `max_total_events_per_minute`.
-
-Example:
-
-```toml
-[security.syscall_anomaly]
-enabled = true
-strict_mode = false
-alert_on_unknown_syscall = true
-max_denied_events_per_minute = 5
-max_total_events_per_minute = 120
-max_alerts_per_minute = 30
-alert_cooldown_secs = 20
-log_path = "syscall-anomalies.log"
-baseline_syscalls = ["read", "write", "openat", "close", "execve", "futex"]
-```
-
 ## `[agents.<name>]`
 
 Delegate sub-agent configurations. Each key under `[agents]` defines a named sub-agent that the primary agent can delegate to.
@@ -222,52 +173,10 @@ model = "qwen2.5-coder:32b"
 temperature = 0.2
 ```
 
-## `[research]`
-
-Research phase allows the agent to gather information through tools before generating the main response.
-
-| Key | Default | Purpose |
-|---|---|---|
-| `enabled` | `false` | Enable research phase |
-| `trigger` | `never` | Research trigger strategy: `never`, `always`, `keywords`, `length`, `question` |
-| `keywords` | `["find", "search", "check", "investigate"]` | Keywords that trigger research (when trigger = `keywords`) |
-| `min_message_length` | `50` | Minimum message length to trigger research (when trigger = `length`) |
-| `max_iterations` | `5` | Maximum tool calls during research phase |
-| `show_progress` | `true` | Show research progress to user |
-
-Notes:
-
-- Research phase is **disabled by default** (`trigger = never`).
-- When enabled, the agent first gathers facts through tools (grep, file_read, shell, memory search), then responds using the collected context.
-- Research runs before the main agent turn and does not count toward `agent.max_tool_iterations`.
-- Trigger strategies:
-  - `never` — research disabled (default)
-  - `always` — research on every user message
-  - `keywords` — research when message contains any keyword from the list
-  - `length` — research when message length exceeds `min_message_length`
-  - `question` — research when message contains '?'
-
-Example:
-
-```toml
-[research]
-enabled = true
-trigger = "keywords"
-keywords = ["find", "show", "check", "how many"]
-max_iterations = 3
-show_progress = true
-```
-
-The agent will research the codebase before responding to queries like:
-- "Find all TODO in src/"
-- "Show contents of main.rs"
-- "How many files in the project?"
-
 ## `[runtime]`
 
 | Key | Default | Purpose |
 |---|---|---|
-| `kind` | `native` | Runtime backend: `native`, `docker`, or `wasm` |
 | `reasoning_enabled` | unset (`None`) | Global reasoning/thinking override for providers that support explicit controls |
 
 Notes:
@@ -275,65 +184,6 @@ Notes:
 - `reasoning_enabled = false` explicitly disables provider-side reasoning for supported providers (currently `ollama`, via request field `think: false`).
 - `reasoning_enabled = true` explicitly requests reasoning for supported providers (`think: true` on `ollama`).
 - Unset keeps provider defaults.
-- Deprecated compatibility alias: `runtime.reasoning_level` is still accepted but should be migrated to `provider.reasoning_level`.
-- `runtime.kind = "wasm"` enables capability-bounded module execution and disables shell/process style execution.
-
-### `[runtime.wasm]`
-
-| Key | Default | Purpose |
-|---|---|---|
-| `tools_dir` | `"tools/wasm"` | Workspace-relative directory containing `.wasm` modules |
-| `fuel_limit` | `1000000` | Instruction budget per module invocation |
-| `memory_limit_mb` | `64` | Per-module memory cap (MB) |
-| `max_module_size_mb` | `50` | Maximum allowed `.wasm` file size (MB) |
-| `allow_workspace_read` | `false` | Allow WASM host calls to read workspace files (future-facing) |
-| `allow_workspace_write` | `false` | Allow WASM host calls to write workspace files (future-facing) |
-| `allowed_hosts` | `[]` | Explicit network host allowlist for WASM host calls (future-facing) |
-
-Notes:
-
-- `allowed_hosts` entries must be normalized `host` or `host:port` strings; wildcards, schemes, and paths are rejected when `runtime.wasm.security.strict_host_validation = true`.
-- Invocation-time capability overrides are controlled by `runtime.wasm.security.capability_escalation_mode`:
-  - `deny` (default): reject escalation above runtime baseline.
-  - `clamp`: reduce requested capabilities to baseline.
-
-### `[runtime.wasm.security]`
-
-| Key | Default | Purpose |
-|---|---|---|
-| `require_workspace_relative_tools_dir` | `true` | Require `runtime.wasm.tools_dir` to be workspace-relative and reject `..` traversal |
-| `reject_symlink_modules` | `true` | Block symlinked `.wasm` module files during execution |
-| `reject_symlink_tools_dir` | `true` | Block execution when `runtime.wasm.tools_dir` is itself a symlink |
-| `strict_host_validation` | `true` | Fail config/invocation on invalid host entries instead of dropping them |
-| `capability_escalation_mode` | `"deny"` | Escalation policy: `deny` or `clamp` |
-| `module_hash_policy` | `"warn"` | Module integrity policy: `disabled`, `warn`, or `enforce` |
-| `module_sha256` | `{}` | Optional map of module names to pinned SHA-256 digests |
-
-Notes:
-
-- `module_sha256` keys must match module names (without `.wasm`) and use `[A-Za-z0-9_-]` only.
-- `module_sha256` values must be 64-character hexadecimal SHA-256 strings.
-- `module_hash_policy = "warn"` allows execution but logs missing/mismatched digests.
-- `module_hash_policy = "enforce"` blocks execution on missing/mismatched digests and requires at least one pin.
-
-WASM profile templates:
-
-- `dev/config.wasm.dev.toml`
-- `dev/config.wasm.staging.toml`
-- `dev/config.wasm.prod.toml`
-
-## `[provider]`
-
-| Key | Default | Purpose |
-|---|---|---|
-| `reasoning_level` | unset (`None`) | Reasoning effort/level override for providers that support explicit levels (currently OpenAI Codex `/responses`) |
-
-Notes:
-
-- Supported values: `minimal`, `low`, `medium`, `high`, `xhigh` (case-insensitive).
-- When set, overrides `ZEROCLAW_CODEX_REASONING_EFFORT` for OpenAI Codex requests.
-- Unset falls back to `ZEROCLAW_CODEX_REASONING_EFFORT` if present, otherwise defaults to `xhigh`.
-- If both `provider.reasoning_level` and deprecated `runtime.reasoning_level` are set, provider-level value wins.
 
 ## `[skills]`
 
@@ -471,14 +321,6 @@ Notes:
 | `require_pairing` | `true` | require pairing before bearer auth |
 | `allow_public_bind` | `false` | block accidental public exposure |
 
-## `[gateway.node_control]` (experimental)
-
-| Key | Default | Purpose |
-|---|---|---|
-| `enabled` | `false` | enable node-control scaffold endpoint (`POST /api/node-control`) |
-| `auth_token` | `null` | optional extra shared token checked via `X-Node-Control-Token` |
-| `allowed_node_ids` | `[]` | allowlist for `node.describe`/`node.invoke` (`[]` accepts any) |
-
 ## `[autonomy]`
 
 | Key | Default | Purpose |
@@ -538,7 +380,6 @@ Use route hints so integrations can keep stable names while model IDs evolve.
 | `hint` | _required_ | Task hint name (e.g. `"reasoning"`, `"fast"`, `"code"`, `"summarize"`) |
 | `provider` | _required_ | Provider to route to (must match a known provider name) |
 | `model` | _required_ | Model to use with that provider |
-| `max_tokens` | unset | Optional per-route output token cap forwarded to provider APIs |
 | `api_key` | unset | Optional API key override for this route's provider |
 
 ### `[[embedding_routes]]`
@@ -559,7 +400,6 @@ embedding_model = "hint:semantic"
 hint = "reasoning"
 provider = "openrouter"
 model = "provider/model-id"
-max_tokens = 8192
 
 [[embedding_routes]]
 hint = "semantic"
@@ -788,31 +628,6 @@ Notes:
 
 - Place `.md`/`.txt` datasheet files named by board (e.g. `nucleo-f401re.md`, `rpi-gpio.md`) in `datasheet_dir` for RAG retrieval.
 - See [hardware-peripherals-design.md](hardware-peripherals-design.md) for board protocol and firmware notes.
-
-## `[agents_ipc]`
-
-Inter-process communication for independent ZeroClaw agents on the same host.
-
-| Key | Default | Purpose |
-|---|---|---|
-| `enabled` | `false` | Enable IPC tools (`agents_list`, `agents_send`, `agents_inbox`, `state_get`, `state_set`) |
-| `db_path` | `~/.zeroclaw/agents.db` | Shared SQLite database path (all agents on this host share one file) |
-| `staleness_secs` | `300` | Agents not seen within this window are considered offline (seconds) |
-
-Notes:
-
-- When `enabled = false` (default), no IPC tools are registered and no database is created.
-- All agents that share a `db_path` can discover each other and exchange messages.
-- Agent identity is derived from `workspace_dir` (SHA-256 hash), not user-supplied.
-
-Example:
-
-```toml
-[agents_ipc]
-enabled = true
-db_path = "~/.zeroclaw/agents.db"
-staleness_secs = 300
-```
 
 ## Security-Relevant Defaults
 

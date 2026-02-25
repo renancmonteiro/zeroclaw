@@ -127,8 +127,7 @@ impl SlackChannel {
                 .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
 
             if !status.is_success() {
-                let sanitized = crate::providers::sanitize_api_error(&body);
-                anyhow::bail!("Slack conversations.list failed ({status}): {sanitized}");
+                anyhow::bail!("Slack conversations.list failed ({status}): {body}");
             }
 
             let data: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
@@ -210,8 +209,7 @@ impl Channel for SlackChannel {
             .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
 
         if !status.is_success() {
-            let sanitized = crate::providers::sanitize_api_error(&body);
-            anyhow::bail!("Slack chat.postMessage failed ({status}): {sanitized}");
+            anyhow::bail!("Slack chat.postMessage failed ({status}): {body}");
         }
 
         // Slack returns 200 for most app-level errors; check JSON "ok" field
