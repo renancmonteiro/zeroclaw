@@ -37,7 +37,7 @@ pub use traits::{
 };
 
 use crate::auth::AuthService;
-use compatible::{AuthStyle, CompatibleApiMode, OpenAiCompatibleProvider};
+use compatible::{AuthStyle, OpenAiCompatibleProvider};
 use reliable::ReliableProvider;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -612,8 +612,6 @@ pub(crate) fn canonical_china_provider_name(name: &str) -> Option<&'static str> 
         Some("qianfan")
     } else if is_doubao_alias(name) {
         Some("doubao")
-    } else if matches!(name, "hunyuan" | "tencent") {
-        Some("hunyuan")
     } else {
         None
     }
@@ -678,10 +676,6 @@ pub struct ProviderRuntimeOptions {
     pub zeroclaw_dir: Option<PathBuf>,
     pub secrets_encrypt: bool,
     pub reasoning_enabled: Option<bool>,
-    pub reasoning_level: Option<String>,
-    pub custom_provider_api_mode: Option<CompatibleApiMode>,
-    pub max_tokens_override: Option<u32>,
-    pub model_support_vision: Option<bool>,
 }
 
 impl Default for ProviderRuntimeOptions {
@@ -692,10 +686,6 @@ impl Default for ProviderRuntimeOptions {
             zeroclaw_dir: None,
             secrets_encrypt: true,
             reasoning_enabled: None,
-            reasoning_level: None,
-            custom_provider_api_mode: None,
-            max_tokens_override: None,
-            model_support_vision: None,
         }
     }
 }
@@ -719,40 +709,21 @@ fn token_end(input: &str, from: usize) -> usize {
 /// Scrub known secret-like token prefixes from provider error strings.
 ///
 /// Redacts tokens with prefixes like `sk-`, `xoxb-`, `xoxp-`, `ghp_`, `gho_`,
-/// `ghu_`, `github_pat_`, `AIza`, and `AKIA`.
+/// `ghu_`, and `github_pat_`.
 pub fn scrub_secret_patterns(input: &str) -> String {
-    const PREFIXES: [(&str, usize); 26] = [
-        ("sk-", 1),
-        ("xoxb-", 1),
-        ("xoxp-", 1),
-        ("ghp_", 1),
-        ("gho_", 1),
-        ("ghu_", 1),
-        ("github_pat_", 1),
-        ("AIza", 1),
-        ("AKIA", 1),
-        ("\"access_token\":\"", 8),
-        ("\"refresh_token\":\"", 8),
-        ("\"id_token\":\"", 8),
-        ("\"token\":\"", 8),
-        ("\"api_key\":\"", 8),
-        ("\"client_secret\":\"", 8),
-        ("\"app_secret\":\"", 8),
-        ("\"verify_token\":\"", 8),
-        ("access_token=", 8),
-        ("refresh_token=", 8),
-        ("id_token=", 8),
-        ("token=", 8),
-        ("api_key=", 8),
-        ("client_secret=", 8),
-        ("app_secret=", 8),
-        ("Bearer ", 16),
-        ("bearer ", 16),
+    const PREFIXES: [&str; 7] = [
+        "sk-",
+        "xoxb-",
+        "xoxp-",
+        "ghp_",
+        "gho_",
+        "ghu_",
+        "github_pat_",
     ];
 
     let mut scrubbed = input.to_string();
 
-    for (prefix, min_len) in PREFIXES {
+    for prefix in PREFIXES {
         let mut search_from = 0;
         loop {
             let Some(rel) = scrubbed[search_from..].find(prefix) else {
@@ -762,10 +733,9 @@ pub fn scrub_secret_patterns(input: &str) -> String {
             let start = search_from + rel;
             let content_start = start + prefix.len();
             let end = token_end(&scrubbed, content_start);
-            let token_len = end.saturating_sub(content_start);
 
             // Bare prefixes like "sk-" should not stop future scans.
-            if token_len < min_len {
+            if end == content_start {
                 search_from = content_start;
                 continue;
             }
@@ -862,7 +832,6 @@ fn resolve_provider_credential(name: &str, credential_override: Option<&str>) ->
         // Bedrock uses AWS AKSK from env vars (AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY),
         // not a single API key. Credential resolution happens inside BedrockProvider.
         "bedrock" | "aws-bedrock" => return None,
-        "hunyuan" | "tencent" => vec!["HUNYUAN_API_KEY"],
         name if is_qianfan_alias(name) => vec!["QIANFAN_API_KEY"],
         name if is_doubao_alias(name) => vec!["ARK_API_KEY", "DOUBAO_API_KEY"],
         name if is_qwen_alias(name) => vec!["DASHSCOPE_API_KEY"],
@@ -999,16 +968,9 @@ fn create_provider_with_url_and_options(
             )?))
         }
         // ── Primary providers (custom implementations) ───────
-        "openrouter" => Ok(Box::new(openrouter::OpenRouterProvider::new_with_max_tokens(
-            key,
-            options.max_tokens_override,
-        ))),
+        "openrouter" => Ok(Box::new(openrouter::OpenRouterProvider::new(key))),
         "anthropic" => Ok(Box::new(anthropic::AnthropicProvider::new(key))),
-        "openai" => Ok(Box::new(openai::OpenAiProvider::with_base_url_and_max_tokens(
-            api_url,
-            key,
-            options.max_tokens_override,
-        ))),
+        "openai" => Ok(Box::new(openai::OpenAiProvider::with_base_url(api_url, key))),
         // Ollama uses api_url for custom base URL (e.g. remote Ollama instance)
         "ollama" => Ok(Box::new(ollama::OllamaProvider::new_with_reasoning(
             api_url,
@@ -1112,12 +1074,6 @@ fn create_provider_with_url_and_options(
                 true,
             )))
         }
-        "hunyuan" | "tencent" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Hunyuan",
-            "https://api.hunyuan.cloud.tencent.com/v1",
-            key,
-            AuthStyle::Bearer,
-        ))),
         name if is_qianfan_alias(name) => Ok(Box::new(OpenAiCompatibleProvider::new(
             "Qianfan", "https://aip.baidubce.com", key, AuthStyle::Bearer,
         ))),
@@ -1260,17 +1216,12 @@ fn create_provider_with_url_and_options(
                 "Custom provider",
                 "custom:https://your-api.com",
             )?;
-            let api_mode = options
-                .custom_provider_api_mode
-                .unwrap_or(CompatibleApiMode::OpenAiChatCompletions);
-            Ok(Box::new(OpenAiCompatibleProvider::new_custom_with_mode(
+            Ok(Box::new(OpenAiCompatibleProvider::new_with_vision(
                 "Custom",
                 &base_url,
                 key,
                 AuthStyle::Bearer,
                 true,
-                api_mode,
-                options.max_tokens_override,
             )))
         }
 
@@ -1388,8 +1339,7 @@ pub fn create_resilient_provider_with_options(
         reliability.provider_backoff_ms,
     )
     .with_api_keys(reliability.api_keys.clone())
-    .with_model_fallbacks(reliability.model_fallbacks.clone())
-    .with_vision_override(options.model_support_vision);
+    .with_model_fallbacks(reliability.model_fallbacks.clone());
 
     Ok(Box::new(reliable))
 }
@@ -1436,56 +1386,38 @@ pub fn create_routed_provider_with_options(
         );
     }
 
-    // Keep a default provider for non-routed model hints.
-    let default_provider = create_resilient_provider_with_options(
-        primary_name,
-        api_key,
-        api_url,
-        reliability,
-        options,
-    )?;
-    let mut providers: Vec<(String, Box<dyn Provider>)> =
-        vec![(primary_name.to_string(), default_provider)];
-
-    // Build hint routes with dedicated provider instances so per-route API keys
-    // and max_tokens overrides do not bleed across routes.
-    let mut routes: Vec<(String, router::Route)> = Vec::new();
+    // Collect unique provider names needed
+    let mut needed: Vec<String> = vec![primary_name.to_string()];
     for route in model_routes {
-        let routed_credential = route.api_key.as_ref().and_then(|raw_key| {
-            let trimmed_key = raw_key.trim();
-            (!trimmed_key.is_empty()).then_some(trimmed_key)
-        });
+        if !needed.iter().any(|n| n == &route.provider) {
+            needed.push(route.provider.clone());
+        }
+    }
+
+    // Create each provider (with its own resilience wrapper)
+    let mut providers: Vec<(String, Box<dyn Provider>)> = Vec::new();
+    for name in &needed {
+        let routed_credential = model_routes
+            .iter()
+            .find(|r| &r.provider == name)
+            .and_then(|r| {
+                r.api_key.as_ref().and_then(|raw_key| {
+                    let trimmed_key = raw_key.trim();
+                    (!trimmed_key.is_empty()).then_some(trimmed_key)
+                })
+            });
         let key = routed_credential.or(api_key);
-        // Only use api_url for routes targeting the same provider namespace.
-        let url = (route.provider == primary_name)
-            .then_some(api_url)
-            .flatten();
-
-        let route_options = options.clone();
-
-        match create_resilient_provider_with_options(
-            &route.provider,
-            key,
-            url,
-            reliability,
-            &route_options,
-        ) {
-            Ok(provider) => {
-                let provider_id = format!("{}#{}", route.provider, route.hint);
-                providers.push((provider_id.clone(), provider));
-                routes.push((
-                    route.hint.clone(),
-                    router::Route {
-                        provider_name: provider_id,
-                        model: route.model.clone(),
-                    },
-                ));
-            }
-            Err(error) => {
+        // Only use api_url for the primary provider
+        let url = if name == primary_name { api_url } else { None };
+        match create_resilient_provider_with_options(name, key, url, reliability, options) {
+            Ok(provider) => providers.push((name.clone(), provider)),
+            Err(e) => {
+                if name == primary_name {
+                    return Err(e);
+                }
                 tracing::warn!(
-                    provider = route.provider.as_str(),
-                    hint = route.hint.as_str(),
-                    "Ignoring routed provider that failed to initialize: {error}"
+                    provider = name.as_str(),
+                    "Ignoring routed provider that failed to initialize"
                 );
             }
         }
@@ -1505,10 +1437,11 @@ pub fn create_routed_provider_with_options(
         })
         .collect();
 
-    Ok(Box::new(
-        router::RouterProvider::new(providers, routes, default_model.to_string())
-            .with_vision_override(options.model_support_vision),
-    ))
+    Ok(Box::new(router::RouterProvider::new(
+        providers,
+        routes,
+        default_model.to_string(),
+    )))
 }
 
 /// Information about a supported provider for display purposes.
@@ -1641,12 +1574,6 @@ pub fn list_providers() -> Vec<ProviderInfo> {
             name: "bedrock",
             display_name: "Amazon Bedrock",
             aliases: &["aws-bedrock"],
-            local: false,
-        },
-        ProviderInfo {
-            name: "hunyuan",
-            display_name: "Hunyuan (Tencent)",
-            aliases: &["tencent"],
             local: false,
         },
         ProviderInfo {
@@ -2010,8 +1937,6 @@ mod tests {
         assert_eq!(canonical_china_provider_name("baidu"), Some("qianfan"));
         assert_eq!(canonical_china_provider_name("doubao"), Some("doubao"));
         assert_eq!(canonical_china_provider_name("volcengine"), Some("doubao"));
-        assert_eq!(canonical_china_provider_name("hunyuan"), Some("hunyuan"));
-        assert_eq!(canonical_china_provider_name("tencent"), Some("hunyuan"));
         assert_eq!(canonical_china_provider_name("openai"), None);
     }
 
@@ -2201,12 +2126,6 @@ mod tests {
         assert!(create_provider("aws-bedrock", None).is_ok());
         // Passing an api_key is harmless (ignored).
         assert!(create_provider("bedrock", Some("ignored")).is_ok());
-    }
-
-    #[test]
-    fn factory_hunyuan() {
-        assert!(create_provider("hunyuan", Some("key")).is_ok());
-        assert!(create_provider("tencent", Some("key")).is_ok());
     }
 
     #[test]
@@ -2883,95 +2802,6 @@ mod tests {
         let input = "failed: github_pat_11AABBC_xyzzy789";
         let result = scrub_secret_patterns(input);
         assert_eq!(result, "failed: [REDACTED]");
-    }
-
-    #[test]
-    fn scrub_google_api_key_prefix() {
-        let input = "upstream returned key AIzaSyA8exampleToken123456";
-        let result = scrub_secret_patterns(input);
-        assert_eq!(result, "upstream returned key [REDACTED]");
-    }
-
-    #[test]
-    fn scrub_aws_access_key_prefix() {
-        let input = "credential leak AKIAIOSFODNN7EXAMPLE";
-        let result = scrub_secret_patterns(input);
-        assert_eq!(result, "credential leak [REDACTED]");
-    }
-
-    #[test]
-    fn sanitize_redacts_json_access_token_field() {
-        let input = r#"{"access_token":"ya29.a0AfH6SMB1234567890abcdef","error":"invalid"}"#;
-        let result = sanitize_api_error(input);
-        assert!(!result.contains("ya29.a0AfH6SMB1234567890abcdef"));
-        assert!(!result.contains("access_token"));
-        assert!(result.contains("[REDACTED]"));
-    }
-
-    #[test]
-    fn sanitize_redacts_query_client_secret_field() {
-        let input = "upstream rejected request: client_secret=supersecret1234567890";
-        let result = sanitize_api_error(input);
-        assert!(!result.contains("supersecret1234567890"));
-        assert!(!result.contains("client_secret"));
-        assert!(result.contains("[REDACTED]"));
-    }
-
-    #[test]
-    fn sanitize_redacts_json_token_field() {
-        let input = r#"{"token":"abcd1234efgh5678","error":"forbidden"}"#;
-        let result = sanitize_api_error(input);
-        assert!(!result.contains("abcd1234efgh5678"));
-        assert!(!result.contains("\"token\""));
-        assert!(result.contains("[REDACTED]"));
-    }
-
-    #[test]
-    fn sanitize_redacts_query_token_field() {
-        let input = "request rejected: token=abcd1234efgh5678";
-        let result = sanitize_api_error(input);
-        assert!(!result.contains("abcd1234efgh5678"));
-        assert!(!result.contains("token="));
-        assert!(result.contains("[REDACTED]"));
-    }
-
-    #[test]
-    fn sanitize_redacts_bearer_token_sequence() {
-        let input = "authorization failed: Bearer abcdefghijklmnopqrstuvwxyz123456";
-        let result = sanitize_api_error(input);
-        assert!(!result.contains("abcdefghijklmnopqrstuvwxyz123456"));
-        assert!(!result.contains("Bearer abcdefghijklmnopqrstuvwxyz123456"));
-        assert!(result.contains("[REDACTED]"));
-    }
-
-    #[test]
-    fn sanitize_preserves_short_bearer_phrase_without_secret() {
-        let input = "Unauthorized — provide Authorization: Bearer token";
-        let result = sanitize_api_error(input);
-        assert_eq!(result, input);
-    }
-
-    #[test]
-    fn routed_provider_accepts_per_route_max_tokens() {
-        let reliability = crate::config::ReliabilityConfig::default();
-        let routes = vec![crate::config::ModelRouteConfig {
-            hint: "reasoning".to_string(),
-            provider: "openrouter".to_string(),
-            model: "anthropic/claude-sonnet-4.6".to_string(),
-            max_tokens: Some(4096),
-            api_key: None,
-        }];
-
-        let provider = create_routed_provider_with_options(
-            "openrouter",
-            Some("openrouter-test-key"),
-            None,
-            &reliability,
-            &routes,
-            "anthropic/claude-sonnet-4.6",
-            &ProviderRuntimeOptions::default(),
-        );
-        assert!(provider.is_ok());
     }
 
     // --- parse_provider_profile ---
